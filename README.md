@@ -21,19 +21,25 @@ Configure Windows to sync time daily, or Binance may reject orders due to timest
 
 ### Step 1: Clone Repository
 
-For Windows and Linux, follow the manual; macOS users may use the [DMG file](../../releases).
+Windows and Linux: detailed steps below. macOS: one-click install with [DMG file](../../releases).  
 
 
 
 
 
-Windows Requirement Check: Git and Python.
+Check your Windows environment for Git and Python.
 
-https://git-scm.com/install/windows
 
-https://www.python.org/ftp/python/3.13.12/python-3.13.12-amd64.exe
 
-Initialize Command Prompt with admin rights.
+Link to install Git for Windows: https://git-scm.com/install/windows  
+
+
+
+Link to install Python for Windows (direct): https://www.python.org/ftp/python/3.13.12/python-3.13.12-amd64.exe  
+
+
+
+Execute commands in GIT CMD.
 
 
 
